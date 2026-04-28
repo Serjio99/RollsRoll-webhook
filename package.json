@@ -1,0 +1,20 @@
+{
+  "name": "rollsroll-webhook-service",
+  "version": "1.0.0",
+  "description": "Intermediate Frontpad to Suvvy webhook service for RollsRoll order status events.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "rollsroll",
+    "frontpad",
+    "suvvy",
+    "webhook"
+  ],
+  "license": "UNLICENSED"
+}
