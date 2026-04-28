@@ -16,5 +16,8 @@
     "suvvy",
     "webhook"
   ],
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "ws": "^8.20.0"
+  }
 }

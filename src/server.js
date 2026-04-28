@@ -4,6 +4,13 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
+let WebSocketClient = globalThis.WebSocket;
+try {
+  WebSocketClient = WebSocketClient || require('ws');
+} catch (error) {
+  WebSocketClient = null;
+}
+
 const ROOT_DIR = path.resolve(__dirname, '..');
 const LOG_DIR = path.join(ROOT_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'webhook-events.log');
@@ -538,8 +545,8 @@ async function sendToSuvvyWidget(payload) {
     throw error;
   }
 
-  if (typeof WebSocket === 'undefined') {
-    const error = new Error('Node.js WebSocket API is not available. Use Node.js 22+ or set SUVVY_DELIVERY_MODE=custom_api');
+  if (!WebSocketClient) {
+    const error = new Error('WebSocket client is not available. Install the ws package or set SUVVY_DELIVERY_MODE=custom_api');
     error.statusCode = 500;
     throw error;
   }
@@ -600,7 +607,7 @@ async function sendToSuvvyWidget(payload) {
 function emitSuvvyWidgetMessage(widgetToken, widgetMessage) {
   return new Promise((resolve, reject) => {
     const wsUrl = `wss://api.suvvy.ai/socket.io/widget?widget_token=${encodeURIComponent(widgetToken)}&EIO=4&transport=websocket`;
-    const socket = new WebSocket(wsUrl);
+    const socket = new WebSocketClient(wsUrl);
     let sent = false;
 
     const timeout = setTimeout(() => {
