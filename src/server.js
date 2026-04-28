@@ -382,6 +382,8 @@ function buildHealthPayload() {
       configured: Boolean(config.suvvyApiUrl),
       url: config.suvvyApiUrl || null,
       token_configured: Boolean(config.suvvyApiToken),
+      production_url_configured: Boolean(config.suvvyApiUrl) && !isLocalMockUrl(config.suvvyApiUrl),
+      production_token_configured: Boolean(config.suvvyApiToken) && !isPlaceholderValue(config.suvvyApiToken),
     },
     telegram: {
       target_enabled: config.deliveryTargets.includes('telegram'),
@@ -403,7 +405,7 @@ function buildHealthPayload() {
     ok: true,
     service: 'rollsroll-webhook-service',
     presentation_ready: config.mockSuvvyEnabled && Boolean(config.suvvyApiUrl),
-    production_ready: !config.mockSuvvyEnabled && Boolean(config.suvvyApiUrl) && Boolean(config.suvvyApiToken),
+    production_ready: !config.mockSuvvyEnabled && Boolean(config.suvvyApiUrl) && !isLocalMockUrl(config.suvvyApiUrl) && Boolean(config.suvvyApiToken) && !isPlaceholderValue(config.suvvyApiToken),
     delivery_targets: config.deliveryTargets,
     integrations,
     missing_for_production: buildMissingProductionItems(integrations),
@@ -414,12 +416,22 @@ function buildMissingProductionItems(integrations) {
   const missing = [];
 
   if (config.mockSuvvyEnabled) missing.push('Disable MOCK_SUVVY_ENABLED for production');
-  if (!integrations.suvvy.configured) missing.push('Set real SUVVY_API_URL');
-  if (!integrations.suvvy.token_configured) missing.push('Set real SUVVY_API_TOKEN or confirm that Suvvy does not require Bearer auth');
+  if (!integrations.suvvy.production_url_configured) missing.push('Set real SUVVY_API_URL instead of local mock URL');
+  if (!integrations.suvvy.production_token_configured) missing.push('Set real SUVVY_API_TOKEN or confirm that Suvvy does not require Bearer auth');
   if (config.deliveryTargets.includes('telegram') && !integrations.telegram.configured) missing.push('Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID or remove telegram from DELIVERY_TARGETS');
   if (config.deliveryTargets.includes('max') && !integrations.max.configured) missing.push('Set MAX_API_URL and MAX_BOT_TOKEN or remove max from DELIVERY_TARGETS');
 
   return missing;
+}
+
+function isLocalMockUrl(value) {
+  const normalized = String(value || '').toLowerCase();
+  return normalized.includes('/mock-suvvy') || normalized.includes('localhost') || normalized.includes('127.0.0.1');
+}
+
+function isPlaceholderValue(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return !normalized || normalized.includes('test') || normalized.includes('change-me') || normalized.includes('real_') || normalized.includes('your-');
 }
 
 function renderTestPanel() {
@@ -777,3 +789,5 @@ module.exports = {
   sendToMax,
   validatePayload,
 };
+
+
