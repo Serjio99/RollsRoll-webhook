@@ -28,6 +28,11 @@ const config = {
   maxEnabled: parseBoolean(process.env.MAX_ENABLED),
   maxApiUrl: process.env.MAX_API_URL || '',
   maxBotToken: process.env.MAX_BOT_TOKEN || '',
+
+  websiteChatEnabled: parseBoolean(process.env.WEBSITE_CHAT_ENABLED),
+  websiteChatProvider: process.env.WEBSITE_CHAT_PROVIDER || 'jivo',
+  jivoWidgetId: process.env.JIVO_WIDGET_ID || '',
+  showChatPlaceholder: parseBoolean(process.env.SHOW_CHAT_PLACEHOLDER || 'true'),
 };
 
 const requiredFields = [
@@ -399,6 +404,13 @@ function buildHealthPayload() {
       url_configured: Boolean(config.maxApiUrl),
       token_configured: Boolean(config.maxBotToken),
     },
+      website_chat: {
+      enabled: config.websiteChatEnabled,
+      provider: config.websiteChatProvider,
+      configured: config.websiteChatEnabled && config.websiteChatProvider === 'jivo' && Boolean(config.jivoWidgetId),
+      jivo_widget_id_configured: Boolean(config.jivoWidgetId),
+      placeholder_visible: config.showChatPlaceholder && !config.jivoWidgetId,
+    },
   };
 
   return {
@@ -420,6 +432,7 @@ function buildMissingProductionItems(integrations) {
   if (!integrations.suvvy.production_token_configured) missing.push('Set real SUVVY_API_TOKEN or confirm that Suvvy does not require Bearer auth');
   if (config.deliveryTargets.includes('telegram') && !integrations.telegram.configured) missing.push('Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID or remove telegram from DELIVERY_TARGETS');
   if (config.deliveryTargets.includes('max') && !integrations.max.configured) missing.push('Set MAX_API_URL and MAX_BOT_TOKEN or remove max from DELIVERY_TARGETS');
+  if (config.websiteChatEnabled && !integrations.website_chat.configured) missing.push('Set JIVO_WIDGET_ID to activate Suvvy website chat widget');
 
   return missing;
 }
@@ -553,6 +566,8 @@ function renderTestPanel() {
       </div>
     </section>
   </main>
+${renderWebsiteChatHtml()}
+${renderWebsiteChatScript()}
 <script>
 const samples = {
   courier: { status_id: '5', status_name: 'Передан курьеру' },
@@ -621,6 +636,42 @@ loadSuvvyEvents();
 </html>`;
 }
 
+function renderWebsiteChatHtml() {
+  if (!config.websiteChatEnabled || config.jivoWidgetId || !config.showChatPlaceholder) return '';
+
+  return `<aside class="chat-placeholder" aria-label="Suvvy.ai website chat placeholder">
+    <div class="chat-head"><strong>Suvvy.ai чат</strong><span>Виджет сайта RollsRoll</span></div>
+    <div class="body">
+      <div class="msg">Здравствуйте! Здесь будет чат-бот Suvvy.ai для обращений с сайта.</div>
+      <div class="msg">Для активации нужно вставить JIVO_WIDGET_ID в .env.</div>
+      <div class="input">Напишите сообщение...</div>
+    </div>
+  </aside>`;
+}
+
+function renderWebsiteChatScript() {
+  if (!config.websiteChatEnabled || config.websiteChatProvider !== 'jivo' || !config.jivoWidgetId) return '';
+
+  const widgetId = JSON.stringify(config.jivoWidgetId);
+  return `<script>
+(function(){
+  var widget_id = ${widgetId};
+  var d = document;
+  var w = window;
+  function loadWidget(){
+    var s = d.createElement('script');
+    s.type = 'text/javascript';
+    s.async = true;
+    s.src = 'https://code.jivo.ru/widget/' + widget_id;
+    var first = d.getElementsByTagName('script')[0];
+    first.parentNode.insertBefore(s, first);
+  }
+  if (d.readyState === 'complete') loadWidget();
+  else if (w.attachEvent) w.attachEvent('onload', loadWidget);
+  else w.addEventListener('load', loadWidget, false);
+})();
+</script>`;
+}
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -789,5 +840,10 @@ module.exports = {
   sendToMax,
   validatePayload,
 };
+
+
+
+
+
 
 

@@ -113,6 +113,36 @@ MAX_BOT_TOKEN=REAL_MAX_BOT_TOKEN
 
 MAX-target делает generic POST в `MAX_API_URL` с Bearer-токеном. Для полной боевой готовности нужно подтвердить точный endpoint и формат, который ожидает MAX-бот.
 
+
+### Чат-бот Suvvy.ai на сайте
+
+Suvvy website chat подключается через Jivo-виджет: в Suvvy создается/подключается канал Jivo, а на сайт ставится widget script Jivo.
+
+Для презентации без реального Jivo ID включен placeholder в правом нижнем углу:
+
+```env
+WEBSITE_CHAT_ENABLED=true
+WEBSITE_CHAT_PROVIDER=jivo
+JIVO_WIDGET_ID=
+SHOW_CHAT_PLACEHOLDER=true
+```
+
+Когда будет готов реальный виджет Jivo/Suvvy, нужно вставить ID:
+
+```env
+WEBSITE_CHAT_ENABLED=true
+WEBSITE_CHAT_PROVIDER=jivo
+JIVO_WIDGET_ID=REAL_JIVO_WIDGET_ID
+SHOW_CHAT_PLACEHOLDER=false
+```
+
+После этого сайт сам подключит скрипт:
+
+```text
+https://code.jivo.ru/widget/REAL_JIVO_WIDGET_ID
+```
+
+Если Suvvy даст другой embed snippet, его нужно заменить в функции `renderWebsiteChatScript()`.
 ## Health
 
 ```http
@@ -236,3 +266,4 @@ logs/webhook-events.log
 - Если нужен прямой MAX target: `MAX_API_URL`, `MAX_BOT_TOKEN` и точный формат MAX API.
 - Реальные `status_id` Frontpad для RollsRoll.
 - Подтверждение, что Frontpad умеет отправлять `X-Webhook-Secret`. Если не умеет, надо заменить защиту на secret в query/body или подпись.
+
