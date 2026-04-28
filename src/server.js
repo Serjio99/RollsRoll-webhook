@@ -14,10 +14,18 @@ loadEnv(path.join(ROOT_DIR, '.env'));
 const config = {
   port: parseInteger(process.env.PORT, 3000),
   webhookSecret: process.env.WEBHOOK_SECRET || '',
+  deliveryTargets: parseList(process.env.DELIVERY_TARGETS || 'suvvy'),
+  mockSuvvyEnabled: parseBoolean(process.env.MOCK_SUVVY_ENABLED),
+
   suvvyApiUrl: process.env.SUVVY_API_URL || '',
   suvvyApiToken: process.env.SUVVY_API_TOKEN || '',
   suvvyTimeoutMs: parseInteger(process.env.SUVVY_REQUEST_TIMEOUT_MS, 10000),
-  mockSuvvyEnabled: String(process.env.MOCK_SUVVY_ENABLED || '').toLowerCase() === 'true',
+
+  telegramEnabled: parseBoolean(process.env.TELEGRAM_ENABLED),
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+
+  maxEnabled: parseBoolean(process.env.MAX_ENABLED),
   maxApiUrl: process.env.MAX_API_URL || '',
   maxBotToken: process.env.MAX_BOT_TOKEN || '',
 };
@@ -62,12 +70,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/health') {
-      return sendJson(res, 200, {
-        ok: true,
-        service: 'rollsroll-webhook-service',
-        mock_suvvy_enabled: config.mockSuvvyEnabled,
-        suvvy_api_url: config.suvvyApiUrl,
-      });
+      return sendJson(res, 200, buildHealthPayload());
     }
 
     if (req.method === 'GET' && url.pathname === '/mock-suvvy/events') {
@@ -122,13 +125,13 @@ async function handleFrontpadWebhook(req, res) {
   logEvent('info', 'Frontpad order status event received', sanitizeForLog(body));
 
   const messageText = buildOrderStatusMessage(body);
-  const suvvyPayload = buildSuvvyPayload(body, messageText);
-  const suvvyResponse = await sendToSuvvy(suvvyPayload);
+  const notificationPayload = buildNotificationPayload(body, messageText);
+  const deliveryResults = await deliverNotification(notificationPayload);
 
-  logEvent('info', 'Event forwarded to Suvvy', {
+  logEvent('info', 'Event delivered', {
     order_id: body.order_id,
     order_number: body.order_number,
-    suvvy_status: suvvyResponse.status,
+    results: deliveryResults.map((result) => ({ target: result.target, status: result.status })),
   });
 
   return sendJson(res, 200, {
@@ -136,6 +139,7 @@ async function handleFrontpadWebhook(req, res) {
     message: 'Webhook processed',
     order_id: body.order_id,
     order_number: body.order_number,
+    deliveries: deliveryResults.map((result) => ({ target: result.target, status: result.status })),
   });
 }
 
@@ -217,7 +221,7 @@ function getStatusKey(statusId, statusName) {
   return byId[String(statusId)] || 'unknown';
 }
 
-function buildSuvvyPayload(order, messageText) {
+function buildNotificationPayload(order, messageText) {
   return {
     event: 'rollsroll_order_status_changed',
     source: 'frontpad',
@@ -225,6 +229,7 @@ function buildSuvvyPayload(order, messageText) {
     recipient: {
       phone: normalizePhone(order.client_phone),
       max_user_id: order.max_user_id || null,
+      telegram_chat_id: order.telegram_chat_id || null,
       name: order.client_name,
     },
     order: {
@@ -246,6 +251,38 @@ function buildSuvvyPayload(order, messageText) {
   };
 }
 
+function buildSuvvyPayload(order, messageText) {
+  return buildNotificationPayload(order, messageText);
+}
+
+async function deliverNotification(payload) {
+  const targets = config.deliveryTargets.length > 0 ? config.deliveryTargets : ['suvvy'];
+  const results = [];
+
+  for (const target of targets) {
+    if (target === 'suvvy') {
+      results.push(await sendToSuvvy(payload));
+      continue;
+    }
+
+    if (target === 'telegram') {
+      results.push(await sendToTelegram(payload));
+      continue;
+    }
+
+    if (target === 'max') {
+      results.push(await sendToMax(payload));
+      continue;
+    }
+
+    const error = new Error(`Unknown delivery target: ${target}`);
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return results;
+}
+
 async function sendToSuvvy(payload) {
   if (!config.suvvyApiUrl) {
     const error = new Error('SUVVY_API_URL is not configured');
@@ -253,15 +290,68 @@ async function sendToSuvvy(payload) {
     throw error;
   }
 
+  const response = await postJson(config.suvvyApiUrl, payload, {
+    ...(config.suvvyApiToken ? { Authorization: `Bearer ${config.suvvyApiToken}` } : {}),
+  });
+
+  return { target: 'suvvy', status: response.status, body: response.body };
+}
+
+async function sendToTelegram(payload) {
+  if (!config.telegramEnabled) {
+    return { target: 'telegram', status: 'skipped', body: 'TELEGRAM_ENABLED=false' };
+  }
+
+  if (!config.telegramBotToken || !config.telegramChatId) {
+    const error = new Error('Telegram is enabled but TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const response = await postJson(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+    chat_id: payload.recipient.telegram_chat_id || config.telegramChatId,
+    text: payload.message.text,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  });
+
+  return { target: 'telegram', status: response.status, body: response.body };
+}
+
+async function sendToMax(payload) {
+  if (!config.maxEnabled) {
+    return { target: 'max', status: 'skipped', body: 'MAX_ENABLED=false' };
+  }
+
+  if (!config.maxApiUrl || !config.maxBotToken) {
+    const error = new Error('MAX is enabled but MAX_API_URL or MAX_BOT_TOKEN is not configured');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const response = await postJson(config.maxApiUrl, {
+    recipient: payload.recipient,
+    order: payload.order,
+    message: payload.message,
+    source: payload.source,
+    event: payload.event,
+  }, {
+    Authorization: `Bearer ${config.maxBotToken}`,
+  });
+
+  return { target: 'max', status: response.status, body: response.body };
+}
+
+async function postJson(url, payload, extraHeaders = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.suvvyTimeoutMs);
 
   try {
-    const response = await fetch(config.suvvyApiUrl, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(config.suvvyApiToken ? { Authorization: `Bearer ${config.suvvyApiToken}` } : {}),
+        ...extraHeaders,
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -270,7 +360,7 @@ async function sendToSuvvy(payload) {
     const responseText = await response.text();
 
     if (!response.ok) {
-      const error = new Error(`Suvvy API returned ${response.status}: ${responseText}`);
+      const error = new Error(`POST ${url} returned ${response.status}: ${responseText}`);
       error.statusCode = 500;
       throw error;
     }
@@ -282,6 +372,54 @@ async function sendToSuvvy(payload) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function buildHealthPayload() {
+  const integrations = {
+    suvvy: {
+      target_enabled: config.deliveryTargets.includes('suvvy'),
+      mock_enabled: config.mockSuvvyEnabled,
+      configured: Boolean(config.suvvyApiUrl),
+      url: config.suvvyApiUrl || null,
+      token_configured: Boolean(config.suvvyApiToken),
+    },
+    telegram: {
+      target_enabled: config.deliveryTargets.includes('telegram'),
+      configured: config.telegramEnabled && Boolean(config.telegramBotToken) && Boolean(config.telegramChatId),
+      enabled: config.telegramEnabled,
+      chat_id_configured: Boolean(config.telegramChatId),
+      token_configured: Boolean(config.telegramBotToken),
+    },
+    max: {
+      target_enabled: config.deliveryTargets.includes('max'),
+      configured: config.maxEnabled && Boolean(config.maxApiUrl) && Boolean(config.maxBotToken),
+      enabled: config.maxEnabled,
+      url_configured: Boolean(config.maxApiUrl),
+      token_configured: Boolean(config.maxBotToken),
+    },
+  };
+
+  return {
+    ok: true,
+    service: 'rollsroll-webhook-service',
+    presentation_ready: config.mockSuvvyEnabled && Boolean(config.suvvyApiUrl),
+    production_ready: !config.mockSuvvyEnabled && Boolean(config.suvvyApiUrl) && Boolean(config.suvvyApiToken),
+    delivery_targets: config.deliveryTargets,
+    integrations,
+    missing_for_production: buildMissingProductionItems(integrations),
+  };
+}
+
+function buildMissingProductionItems(integrations) {
+  const missing = [];
+
+  if (config.mockSuvvyEnabled) missing.push('Disable MOCK_SUVVY_ENABLED for production');
+  if (!integrations.suvvy.configured) missing.push('Set real SUVVY_API_URL');
+  if (!integrations.suvvy.token_configured) missing.push('Set real SUVVY_API_TOKEN or confirm that Suvvy does not require Bearer auth');
+  if (config.deliveryTargets.includes('telegram') && !integrations.telegram.configured) missing.push('Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID or remove telegram from DELIVERY_TARGETS');
+  if (config.deliveryTargets.includes('max') && !integrations.max.configured) missing.push('Set MAX_API_URL and MAX_BOT_TOKEN or remove max from DELIVERY_TARGETS');
+
+  return missing;
 }
 
 function renderTestPanel() {
@@ -306,6 +444,7 @@ function renderTestPanel() {
     comment: 'Без васаби',
     payment_type: 'Картой',
     max_user_id: 'optional',
+    telegram_chat_id: 'optional',
     created_at: '2026-04-28 14:30:00',
   };
 
@@ -348,7 +487,7 @@ function renderTestPanel() {
 <body>
   <header>
     <h1>RollsRoll webhook demo</h1>
-    <p>Тестовая панель для презентации: вставьте JSON события Frontpad, отправьте webhook и посмотрите, какой payload сервис передал в Suvvy.</p>
+    <p>Тестовая панель для презентации: вставьте JSON события Frontpad, отправьте webhook и посмотрите, что сервис передал дальше.</p>
   </header>
   <main>
     <section class="panel stack">
@@ -377,7 +516,7 @@ function renderTestPanel() {
       <div class="panel stack">
         <div class="grid2">
           <div class="mini"><b>Webhook endpoint</b><span class="hint">POST /webhook/frontpad/order-status</span></div>
-          <div class="mini"><b>Suvvy URL сейчас</b><span class="hint">${escapeHtml(config.suvvyApiUrl || 'не задан')}</span></div>
+          <div class="mini"><b>Targets</b><span class="hint">${escapeHtml(config.deliveryTargets.join(', ') || 'не заданы')}</span></div>
         </div>
         <div>
           <label>Ответ webhook-сервиса</label>
@@ -388,7 +527,7 @@ function renderTestPanel() {
       <div class="panel stack">
         <div class="row">
           <div style="flex:1">
-            <label>Последний payload, полученный Suvvy</label>
+            <label>Последний payload в demo/mock Suvvy</label>
             <p class="hint">В demo-mode это принимает встроенный mock Suvvy: POST /mock-suvvy.</p>
           </div>
           <button class="ghost" type="button" onclick="loadSuvvyEvents()">Обновить</button>
@@ -397,9 +536,8 @@ function renderTestPanel() {
       </div>
 
       <div class="panel stack">
-        <label>Куда вставлять API</label>
-        <div class="mini"><b>Suvvy-бот</b><span class="hint">.env -> SUVVY_API_URL и SUVVY_API_TOKEN. Это основной путь интеграции.</span></div>
-        <div class="mini"><b>MAX-бот</b><span class="hint">Если отправляем напрямую в MAX, добавить .env -> MAX_API_URL и MAX_BOT_TOKEN, затем заменить sendToSuvvy на отправку в MAX или оставить MAX внутри Suvvy.</span></div>
+        <label>Готовность интеграций</label>
+        <pre id="ready">Загружаем статус...</pre>
       </div>
     </section>
   </main>
@@ -411,14 +549,17 @@ const samples = {
 
 async function checkHealth() {
   const el = document.getElementById('health');
+  const ready = document.getElementById('ready');
   try {
     const res = await fetch('/health');
     const data = await res.json();
-    el.className = 'status ok';
-    el.lastElementChild.textContent = data.ok ? 'Сервис работает' : 'Сервис отвечает с ошибкой';
+    el.className = data.presentation_ready ? 'status ok' : 'status bad';
+    el.lastElementChild.textContent = data.presentation_ready ? 'Готово для демо' : 'Нужна настройка';
+    ready.textContent = JSON.stringify(data, null, 2);
   } catch (error) {
     el.className = 'status bad';
     el.lastElementChild.textContent = 'Сервис недоступен';
+    ready.textContent = error.message;
   }
 }
 
@@ -438,6 +579,7 @@ async function sendWebhook() {
     const data = await response.json();
     out.textContent = JSON.stringify({ http_status: response.status, body: data }, null, 2);
     await loadSuvvyEvents();
+    await checkHealth();
   } catch (error) {
     out.textContent = error.message;
   }
@@ -574,6 +716,17 @@ function parseStatusMessages(value) {
   }
 }
 
+function parseBoolean(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function parseList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -617,8 +770,10 @@ function loadEnv(filePath) {
 module.exports = {
   server,
   buildOrderStatusMessage,
+  buildNotificationPayload,
   buildSuvvyPayload,
   sendToSuvvy,
+  sendToTelegram,
+  sendToMax,
   validatePayload,
 };
-

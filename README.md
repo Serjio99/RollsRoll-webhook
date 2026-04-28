@@ -4,6 +4,22 @@
 
 Важно: сервис не создает заказ во Frontpad. Frontpad используется только как источник события по уже созданному заказу.
 
+## Статус для презентации
+
+Готово для показа заказчику:
+
+- публичный домен `https://webhook.prom-logic.ru`;
+- HTTPS через Let's Encrypt;
+- тестовая панель в браузере;
+- вставка тестового JSON от Frontpad;
+- проверка обязательных полей;
+- проверка `X-Webhook-Secret`;
+- формирование текста уведомления по статусу заказа;
+- demo/mock Suvvy, где видно payload, который уйдет дальше;
+- health endpoint со статусом интеграций.
+
+Для боевого теста с реальным клиентским уведомлением еще нужны реальные данные Suvvy/MAX/Telegram-ботов: URL, токены и точная схема payload, которую они ожидают.
+
 ## Как показать заказчику без PowerShell
 
 1. Откройте папку `D:\__JOB___\_SUVVY\rollsroll-webhook-service`.
@@ -12,59 +28,18 @@
 4. В браузере откроется тестовая панель `http://localhost:3010/`.
 5. В поле `Тестовый JSON от Frontpad` можно вставить реальный или тестовый JSON.
 6. Нажмите `Отправить webhook`.
-7. Справа будет видно:
-   - ответ webhook-сервиса;
-   - payload, который ушел бы в Suvvy.
+7. Справа будет видно ответ webhook-сервиса и payload, который ушел бы в Suvvy.
 
-Для презентации включен demo-mode: `SUVVY_API_URL=http://localhost:3010/mock-suvvy`. Это встроенный mock Suvvy, чтобы тест возвращал `200 OK` без реального Suvvy API.
+На сервере панель доступна здесь:
 
-## Куда вставлять API Suvvy-бота и MAX-бота
-
-Все значения вставляются в файл `.env`.
-
-### Suvvy-бот
-
-Это основной путь текущей архитектуры: Frontpad -> этот сервис -> Suvvy -> MAX.
-
-В `.env` заменить demo-значения:
-
-```env
-MOCK_SUVVY_ENABLED=false
-SUVVY_API_URL=https://REAL-SUVVY-BOT-URL/api/frontpad/order-status
-SUVVY_API_TOKEN=REAL_SUVVY_TOKEN
+```text
+https://webhook.prom-logic.ru/
 ```
 
-`SUVVY_API_URL` - endpoint Suvvy-бота, который принимает подготовленный payload.
-
-`SUVVY_API_TOKEN` - токен Suvvy-бота. Сервис отправляет его как `Authorization: Bearer ...`.
-
-### MAX-бот
-
-По текущему ТЗ этот сервис не должен напрямую писать в MAX: уведомление отправляет Suvvy-бот. Поэтому данные MAX обычно вставляются в соседнем проекте MAX/Suvvy-бота.
-
-Если позже решим отправлять напрямую в MAX из этого сервиса, в `.env` уже оставлены места:
-
-```env
-MAX_API_URL=https://botapi.max.ru/...
-MAX_BOT_TOKEN=REAL_MAX_BOT_TOKEN
-```
-
-После этого надо будет отдельно добавить функцию `sendToMax(payload)` или заменить маршрут отправки внутри `sendToSuvvy`.
-
-## Что нужно для боевого подключения
-
-- Реальный `SUVVY_API_URL`: куда Suvvy-бот хочет получать событие.
-- Реальный `SUVVY_API_TOKEN` или другой способ авторизации, если у Suvvy не Bearer-токен.
-- Точная схема payload, которую ожидает Suvvy-бот. Сейчас сервис отправляет подготовленную универсальную структуру.
-- Реальные `status_id` из Frontpad для RollsRoll. Сейчас есть базовая карта `1..7`, но ее лучше сверить с фактическими статусами.
-- Публичный URL сервиса для Frontpad, например через сервер/VPS/reverse proxy/HTTPS.
-- Как Frontpad настраивает секретный заголовок `X-Webhook-Secret`. Если Frontpad не умеет кастомный заголовок, нужно заменить защиту на query secret или подпись.
-- Тестовый номер/аккаунт MAX, на который можно безопасно отправить первое уведомление.
-
-## Endpoint
+## Endpoint для Frontpad
 
 ```http
-POST /webhook/frontpad/order-status
+POST https://webhook.prom-logic.ru/webhook/frontpad/order-status
 ```
 
 Обязательный заголовок:
@@ -73,19 +48,84 @@ POST /webhook/frontpad/order-status
 X-Webhook-Secret: значение-из-WEBHOOK_SECRET
 ```
 
-## Переменные окружения
+## Интеграции
 
-| Переменная | Описание |
-| --- | --- |
-| `PORT` | Порт HTTP-сервера. По умолчанию `3000`. |
-| `WEBHOOK_SECRET` | Секрет, который должен прийти в заголовке `X-Webhook-Secret`. |
-| `MOCK_SUVVY_ENABLED` | `true` для презентации с mock Suvvy, `false` для боевого Suvvy. |
-| `SUVVY_API_URL` | URL Suvvy API, куда сервис отправляет подготовленный payload. |
-| `SUVVY_API_TOKEN` | Bearer-токен для Suvvy API. |
-| `SUVVY_REQUEST_TIMEOUT_MS` | Таймаут запроса в Suvvy. По умолчанию `10000`. |
-| `MAX_API_URL` | Placeholder для прямой интеграции с MAX, если она понадобится позже. |
-| `MAX_BOT_TOKEN` | Placeholder для токена MAX-бота, если прямую отправку добавим в этот сервис. |
-| `STATUS_MESSAGES_JSON` | Необязательный JSON-объект для переопределения текстов по `status_id`. |
+Сервис поддерживает targets через переменную `DELIVERY_TARGETS`:
+
+```env
+DELIVERY_TARGETS=suvvy
+```
+
+Можно указать несколько targets через запятую:
+
+```env
+DELIVERY_TARGETS=suvvy,telegram,max
+```
+
+### Suvvy-бот
+
+Основная архитектура: Frontpad -> webhook service -> Suvvy -> MAX.
+
+Для демо:
+
+```env
+MOCK_SUVVY_ENABLED=true
+SUVVY_API_URL=http://localhost:3010/mock-suvvy
+SUVVY_API_TOKEN=test-suvvy-token
+```
+
+Для production:
+
+```env
+MOCK_SUVVY_ENABLED=false
+DELIVERY_TARGETS=suvvy
+SUVVY_API_URL=https://REAL-SUVVY-BOT-URL/api/frontpad/order-status
+SUVVY_API_TOKEN=REAL_SUVVY_TOKEN
+```
+
+`SUVVY_API_TOKEN` отправляется как `Authorization: Bearer ...`.
+
+### Telegram-бот
+
+Telegram добавлен как опциональный mirror-target для внутреннего тестирования или админских уведомлений.
+
+```env
+DELIVERY_TARGETS=suvvy,telegram
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=REAL_TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID=REAL_TELEGRAM_CHAT_ID
+```
+
+Если в payload от Frontpad будет `telegram_chat_id`, сервис отправит сообщение туда. Иначе использует `TELEGRAM_CHAT_ID` из `.env`.
+
+### MAX-бот
+
+По предпочтительной архитектуре MAX остается за Suvvy, то есть этот сервис напрямую в MAX не пишет.
+
+Но прямой target подготовлен:
+
+```env
+DELIVERY_TARGETS=max
+MAX_ENABLED=true
+MAX_API_URL=https://REAL-MAX-BOT-API-URL
+MAX_BOT_TOKEN=REAL_MAX_BOT_TOKEN
+```
+
+MAX-target делает generic POST в `MAX_API_URL` с Bearer-токеном. Для полной боевой готовности нужно подтвердить точный endpoint и формат, который ожидает MAX-бот.
+
+## Health
+
+```http
+GET /health
+```
+
+Ответ показывает:
+
+- `presentation_ready` - готово ли для демонстрации;
+- `production_ready` - готово ли для боевого режима Suvvy без mock;
+- `delivery_targets`;
+- какие токены/URL сконфигурированы;
+- что еще не хватает для production.
 
 ## Обязательные поля payload
 
@@ -95,6 +135,60 @@ X-Webhook-Secret: значение-из-WEBHOOK_SECRET
 - `status_name`
 - `client_phone`
 - `client_name`
+
+## Payload от Frontpad
+
+```json
+{
+  "event": "order_status_changed",
+  "order_id": "12345678",
+  "order_number": "000123",
+  "status_id": "3",
+  "status_name": "Принят",
+  "client_name": "Иван",
+  "client_phone": "79000000000",
+  "delivery_time": "18:40",
+  "delivery_address": "ул. Ленина, 10",
+  "order_sum": "1450",
+  "items": [
+    {
+      "name": "Филадельфия",
+      "quantity": 1,
+      "price": 590
+    }
+  ],
+  "comment": "Без васаби",
+  "payment_type": "Картой",
+  "max_user_id": "optional",
+  "telegram_chat_id": "optional",
+  "created_at": "2026-04-28 14:30:00"
+}
+```
+
+## Payload, отправляемый дальше
+
+```json
+{
+  "event": "rollsroll_order_status_changed",
+  "source": "frontpad",
+  "channel": "max",
+  "recipient": {
+    "phone": "79000000000",
+    "max_user_id": "optional",
+    "telegram_chat_id": "optional",
+    "name": "Иван"
+  },
+  "order": {
+    "id": "12345678",
+    "number": "000123",
+    "status_id": "3",
+    "status_name": "Принят"
+  },
+  "message": {
+    "text": "Заказ 000123 принят."
+  }
+}
+```
 
 ## Статусы
 
@@ -118,10 +212,10 @@ STATUS_MESSAGES_JSON={"10":"Заказ #{order_number} принят.","20":"За
 
 ## Ответы сервиса
 
-- `200 OK` - событие принято, обработано и передано в Suvvy.
+- `200 OK` - событие принято, обработано и передано в настроенные targets.
 - `400 Bad Request` - тело запроса не JSON или не хватает обязательных полей.
 - `401 Unauthorized` - неверный или отсутствующий `X-Webhook-Secret`.
-- `500 Internal Server Error` - ошибка конфигурации или ошибка при отправке в Suvvy.
+- `500 Internal Server Error` - ошибка конфигурации или ошибка при отправке в target.
 
 ## Логи
 
@@ -133,3 +227,12 @@ logs/webhook-events.log
 
 Телефон клиента в логах маскируется.
 
+## Чего не хватает для полной боевой готовности
+
+- Реальный `SUVVY_API_URL` из Suvvy-бота.
+- Реальный `SUVVY_API_TOKEN` или подтверждение другого способа авторизации.
+- Точная схема, которую ожидает Suvvy-бот.
+- Если нужен Telegram mirror: `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID`.
+- Если нужен прямой MAX target: `MAX_API_URL`, `MAX_BOT_TOKEN` и точный формат MAX API.
+- Реальные `status_id` Frontpad для RollsRoll.
+- Подтверждение, что Frontpad умеет отправлять `X-Webhook-Secret`. Если не умеет, надо заменить защиту на secret в query/body или подпись.
