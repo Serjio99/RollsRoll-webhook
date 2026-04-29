@@ -1372,10 +1372,18 @@ const telegramBotUsername = ${JSON.stringify(config.telegramBotUsername)};
 const telegramBotId = ${JSON.stringify(config.telegramBotId)};
 const knownTelegramSessions = {
   '1310305591': {
+    username: '@Serge_CodeCrafter',
     session_id: '69f0da4cc6625338cd0f057b',
     external_id: 'telegram_bot_8605219309_1310305591'
   }
 };
+
+const knownTelegramUsers = Object.fromEntries(
+  Object.entries(knownTelegramSessions).map(([chatId, session]) => [
+    String(session.username || '').toLowerCase(),
+    { chat_id: chatId, ...session }
+  ])
+);
 
 const samples = {
   accepted: { status_id: '3', status_name: 'Принят' },
@@ -1406,26 +1414,48 @@ function buildTelegramExternalId(chatId) {
   return cleanChatId ? 'telegram_bot_' + telegramBotId + '_' + cleanChatId : '';
 }
 
+function resolveTelegramRecipient() {
+  const usernameField = document.getElementById('telegramUsername');
+  const chatIdField = document.getElementById('telegramChatId');
+  const username = normalizeTelegramUsername(usernameField.value);
+  let chatId = String(chatIdField.value || '').trim();
+  const knownByUsername = knownTelegramUsers[username.toLowerCase()];
+
+  usernameField.value = username;
+  if (!chatId && knownByUsername) {
+    chatId = knownByUsername.chat_id;
+    chatIdField.value = chatId;
+  }
+
+  return {
+    username,
+    chatId,
+    known: knownTelegramSessions[chatId] || knownByUsername || null,
+  };
+}
+
+function applyTelegramRecipientToPayload() {
+  const recipient = resolveTelegramRecipient();
+  const payload = readPayload();
+  const externalId = recipient.chatId ? (recipient.known ? recipient.known.external_id : buildTelegramExternalId(recipient.chatId)) : '';
+
+  payload.telegram_username = recipient.username;
+  payload.telegram_chat_id = recipient.chatId;
+  payload.suvvy_external_id = externalId;
+  payload.suvvy_chat_id = externalId;
+  payload.suvvy_session_id = recipient.chatId && recipient.known ? recipient.known.session_id : '';
+
+  writePayload(payload);
+  return { payload, recipient };
+}
+
 function registerTelegram() {
   const status = document.getElementById('telegramRegistrationStatus');
-  const username = normalizeTelegramUsername(document.getElementById('telegramUsername').value);
-  const chatId = String(document.getElementById('telegramChatId').value || '').trim();
-  document.getElementById('telegramUsername').value = username;
 
   try {
-    const payload = readPayload();
-    const known = knownTelegramSessions[chatId];
-    const externalId = known ? known.external_id : buildTelegramExternalId(chatId);
-
-    payload.telegram_username = username;
-    payload.telegram_chat_id = chatId;
-    payload.suvvy_external_id = externalId || payload.suvvy_external_id || '';
-    payload.suvvy_chat_id = externalId || payload.suvvy_chat_id || '';
-    payload.suvvy_session_id = known ? known.session_id : payload.suvvy_session_id || '';
-
-    writePayload(payload);
-    status.textContent = chatId
-      ? 'Telegram-связка обновлена. Событие будет отправлено для chat_id ' + chatId + '.'
+    const { recipient } = applyTelegramRecipientToPayload();
+    status.textContent = recipient.chatId
+      ? 'Telegram-связка обновлена. Сообщение будет отправлено пользователю ' + (recipient.username || recipient.chatId) + '.'
       : 'Укажите chat_id после того, как клиент открыл Telegram-бота.';
   } catch (error) {
     status.textContent = 'Проверьте JSON события: ' + error.message;
@@ -1463,11 +1493,11 @@ async function sendWebhook() {
   webhookMetric.textContent = 'Отправка';
   deliveryMetric.textContent = 'Ожидание';
   try {
-    registerTelegram();
-    const payload = readPayload();
+    const { payload, recipient } = applyTelegramRecipientToPayload();
     if (!payload.telegram_chat_id && !payload.suvvy_external_id) {
-      throw new Error('Для отправки клиенту укажите Telegram chat_id или Suvvy external_id.');
+      throw new Error('Для отправки пользователю укажите Telegram chat_id. По одному @username Telegram-бот не может начать диалог.');
     }
+    document.getElementById('telegramRegistrationStatus').textContent = 'Отправка пользователю ' + (recipient.username || recipient.chatId) + '...';
     const response = await fetch('/webhook/frontpad/order-status', {
       method: 'POST',
       headers: {
@@ -1479,7 +1509,10 @@ async function sendWebhook() {
     const data = await response.json();
     out.textContent = JSON.stringify({ http_status: response.status, body: data }, null, 2);
     webhookMetric.textContent = response.status === 200 ? 'Принято' : 'Ошибка ' + response.status;
-    deliveryMetric.textContent = data.deliveries && data.deliveries.length ? 'Suvvy получил trigger' : 'Нет данных';
+    deliveryMetric.textContent = data.deliveries && data.deliveries.length ? 'Suvvy получил trigger для ' + (recipient.username || recipient.chatId) : 'Нет данных';
+    document.getElementById('telegramRegistrationStatus').textContent = response.status === 200
+      ? 'Сообщение отправлено пользователю ' + (recipient.username || recipient.chatId) + '.'
+      : 'Suvvy вернул ошибку отправки.';
     await loadSuvvyEvents();
     await checkHealth();
   } catch (error) {
@@ -1492,6 +1525,7 @@ async function sendWebhook() {
 function loadSample(name) {
   const current = readPayload();
   writePayload({ ...current, ...samples[name] });
+  registerTelegram();
 }
 
 function formatJson() {
@@ -1584,6 +1618,9 @@ function escapeHtmlText(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
 }
 
+document.getElementById('telegramUsername').addEventListener('input', registerTelegram);
+document.getElementById('telegramChatId').addEventListener('input', registerTelegram);
+registerTelegram();
 checkHealth();
 loadSuvvyEvents();
 loadSiteChatMessages();
