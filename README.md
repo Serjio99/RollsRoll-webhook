@@ -111,9 +111,20 @@ DELIVERY_TARGETS=suvvy,telegram
 TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=REAL_TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID=REAL_TELEGRAM_CHAT_ID
+TELEGRAM_BOT_USERNAME=RollsRollOrderBot
+TELEGRAM_BOT_ID=8605219309
 ```
 
 Если во входящем payload есть `telegram_chat_id`, сервис отправит сообщение туда. Иначе используется `TELEGRAM_CHAT_ID` из `.env`. Без реальных `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` Telegram-сообщение не отправляется; в ответе webhook будет `telegram: not_configured`.
+
+В служебной панели сайта есть блок регистрации Telegram-клиента. Рабочий порядок такой:
+
+1. Клиент открывает Telegram-бота RollsRoll и нажимает Start.
+2. В панели указывается Telegram аккаунт и `telegram_chat_id`.
+3. Кнопка `Зарегистрировать Telegram` добавляет в JSON поля `telegram_chat_id`, `suvvy_external_id`, `suvvy_chat_id`.
+4. Кнопка `Отправить сообщение` отправляет событие статуса в Suvvy для этого Telegram-диалога.
+
+Важно: Telegram Bot API не позволяет боту первым написать пользователю только по `@username`. Для доставки сообщения нужен активный диалог пользователя с ботом и известный `chat_id`.
 
 ### MAX
 
@@ -130,24 +141,22 @@ MAX_BOT_TOKEN=REAL_MAX_BOT_TOKEN
 
 ## Чат Suvvy.ai на сайте
 
-Suvvy website chat подключается через Jivo-виджет: в Suvvy создается или подключается Jivo-канал, а на сайт устанавливается widget script.
+Suvvy website chat подключается через официальный widget script Suvvy.ai.
 
 Параметры:
 
 ```env
 WEBSITE_CHAT_ENABLED=true
-WEBSITE_CHAT_PROVIDER=jivo
-JIVO_WIDGET_ID=REAL_JIVO_WIDGET_ID
+WEBSITE_CHAT_PROVIDER=suvvy
+SUVVY_WIDGET_ID=REAL_SUVVY_WIDGET_ID
 SHOW_CHAT_PLACEHOLDER=false
 ```
 
-После настройки `JIVO_WIDGET_ID` сайт подключает скрипт:
+После настройки `SUVVY_WIDGET_ID` сайт подключает скрипт:
 
 ```text
-https://code.jivo.ru/widget/REAL_JIVO_WIDGET_ID
+https://storage1.suvvy.ai/widget/loader.js
 ```
-
-Если `JIVO_WIDGET_ID` не задан, интерфейс использует локальный рабочий чат для проверки отправки и ответа на сайте. Полноценный Suvvy.ai/Jivo чат начнет работать после подключения реального Jivo/Suvvy канала.
 
 ## Payload от Frontpad
 

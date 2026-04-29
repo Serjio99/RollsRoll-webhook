@@ -37,6 +37,8 @@ const config = {
   telegramEnabled: parseBoolean(process.env.TELEGRAM_ENABLED),
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+  telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || 'RollsRollOrderBot',
+  telegramBotId: process.env.TELEGRAM_BOT_ID || '8605219309',
 
   maxEnabled: parseBoolean(process.env.MAX_ENABLED),
   maxApiUrl: process.env.MAX_API_URL || '',
@@ -363,6 +365,7 @@ function buildNotificationPayload(order, messageText) {
       phone: normalizePhone(order.client_phone),
       max_user_id: order.max_user_id || null,
       telegram_chat_id: order.telegram_chat_id || null,
+      telegram_username: order.telegram_username || null,
       name: order.client_name,
     },
     order: {
@@ -401,6 +404,7 @@ function buildSuvvyCustomMessagePayload(order, messageText) {
     message_sender: 'customer',
     client_name: order.client_name,
       client_phone: order.client_phone,
+      telegram_username: order.telegram_username || '',
       telegram_chat_id: order.telegram_chat_id || '',
       suvvy_chat_id: order.suvvy_chat_id || '',
       suvvy_session_id: order.suvvy_session_id || '',
@@ -417,6 +421,9 @@ function buildSuvvyCustomMessagePayload(order, messageText) {
       payment_type: order.payment_type || '',
       comment: order.comment || '',
       created_at: order.created_at || '',
+      telegram_username: order.telegram_username || '',
+      telegram_chat_id: order.telegram_chat_id || '',
+      suvvy_external_id: order.suvvy_external_id || '',
     },
   };
 }
@@ -838,6 +845,7 @@ function renderTestPanel() {
     comment: 'Без васаби',
     payment_type: 'Картой',
     max_user_id: 'optional',
+    telegram_username: '@Serge_CodeCrafter',
     telegram_chat_id: '1310305591',
     suvvy_session_id: '69f0da4cc6625338cd0f057b',
     suvvy_external_id: 'telegram_bot_8605219309_1310305591',
@@ -1074,6 +1082,35 @@ function renderTestPanel() {
       gap: 14px;
     }
 
+    .telegram-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .telegram-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .field-note {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .inline-status {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
     label {
       display: block;
       margin-bottom: 7px;
@@ -1207,6 +1244,7 @@ function renderTestPanel() {
     @media (max-width: 980px) {
       .topbar-inner, .page { padding-left: 16px; padding-right: 16px; }
       .hero, .layout { grid-template-columns: 1fr; }
+      .telegram-grid { grid-template-columns: 1fr; }
       .endpoint { white-space: normal; }
       textarea { min-height: 320px; }
       .chat-panel { left: 14px; right: 14px; width: auto; }
@@ -1260,6 +1298,25 @@ function renderTestPanel() {
             <label for="secret">Webhook secret</label>
             <input id="secret" value="${escapeHtml(config.webhookSecret || 'test-secret-123')}">
           </div>
+          <div class="telegram-card">
+            <div class="telegram-grid">
+              <div>
+                <label for="telegramUsername">Telegram аккаунт клиента</label>
+                <input id="telegramUsername" value="@Serge_CodeCrafter" placeholder="@username">
+                <p class="field-note">Аккаунт используется для регистрации клиента в рабочем сценарии.</p>
+              </div>
+              <div>
+                <label for="telegramChatId">Telegram chat_id</label>
+                <input id="telegramChatId" value="1310305591" placeholder="Например: 1310305591">
+                <p class="field-note">Бот отправляет сообщение после того, как клиент открыл диалог с ботом.</p>
+              </div>
+            </div>
+            <div class="actions">
+              <button type="button" onclick="registerTelegram()">Зарегистрировать Telegram</button>
+              <button class="ghost" type="button" onclick="openTelegramBot()">Открыть Telegram-бота</button>
+              <span id="telegramRegistrationStatus" class="inline-status">Telegram-связка готова для тестового клиента.</span>
+            </div>
+          </div>
           <div>
             <label for="payload">JSON события Frontpad</label>
             <textarea id="payload" spellcheck="false">${escapeHtml(JSON.stringify(defaultPayload, null, 2))}</textarea>
@@ -1311,6 +1368,15 @@ function renderTestPanel() {
 ${renderWebsiteChatHtml()}
 ${renderWebsiteChatScript()}
 <script>
+const telegramBotUsername = ${JSON.stringify(config.telegramBotUsername)};
+const telegramBotId = ${JSON.stringify(config.telegramBotId)};
+const knownTelegramSessions = {
+  '1310305591': {
+    session_id: '69f0da4cc6625338cd0f057b',
+    external_id: 'telegram_bot_8605219309_1310305591'
+  }
+};
+
 const samples = {
   accepted: { status_id: '3', status_name: 'Принят' },
   cooking: { status_id: '4', status_name: 'Готовится' },
@@ -1321,6 +1387,54 @@ const samples = {
   ready: { status_id: '9', status_name: 'Готов к выдаче' },
   payment: { status_id: '10', status_name: 'Ожидает оплаты' }
 };
+
+function readPayload() {
+  return JSON.parse(document.getElementById('payload').value);
+}
+
+function writePayload(payload) {
+  document.getElementById('payload').value = JSON.stringify(payload, null, 2);
+}
+
+function normalizeTelegramUsername(value) {
+  const normalized = String(value || '').trim().replace(/^@+/, '');
+  return normalized ? '@' + normalized : '';
+}
+
+function buildTelegramExternalId(chatId) {
+  const cleanChatId = String(chatId || '').trim();
+  return cleanChatId ? 'telegram_bot_' + telegramBotId + '_' + cleanChatId : '';
+}
+
+function registerTelegram() {
+  const status = document.getElementById('telegramRegistrationStatus');
+  const username = normalizeTelegramUsername(document.getElementById('telegramUsername').value);
+  const chatId = String(document.getElementById('telegramChatId').value || '').trim();
+  document.getElementById('telegramUsername').value = username;
+
+  try {
+    const payload = readPayload();
+    const known = knownTelegramSessions[chatId];
+    const externalId = known ? known.external_id : buildTelegramExternalId(chatId);
+
+    payload.telegram_username = username;
+    payload.telegram_chat_id = chatId;
+    payload.suvvy_external_id = externalId || payload.suvvy_external_id || '';
+    payload.suvvy_chat_id = externalId || payload.suvvy_chat_id || '';
+    payload.suvvy_session_id = known ? known.session_id : payload.suvvy_session_id || '';
+
+    writePayload(payload);
+    status.textContent = chatId
+      ? 'Telegram-связка обновлена. Событие будет отправлено для chat_id ' + chatId + '.'
+      : 'Укажите chat_id после того, как клиент открыл Telegram-бота.';
+  } catch (error) {
+    status.textContent = 'Проверьте JSON события: ' + error.message;
+  }
+}
+
+function openTelegramBot() {
+  window.open('https://t.me/' + telegramBotUsername + '?start=rollsroll', '_blank', 'noopener,noreferrer');
+}
 
 async function checkHealth() {
   const serviceBadge = document.getElementById('serviceBadge');
@@ -1349,7 +1463,11 @@ async function sendWebhook() {
   webhookMetric.textContent = 'Отправка';
   deliveryMetric.textContent = 'Ожидание';
   try {
-    const payload = JSON.parse(document.getElementById('payload').value);
+    registerTelegram();
+    const payload = readPayload();
+    if (!payload.telegram_chat_id && !payload.suvvy_external_id) {
+      throw new Error('Для отправки клиенту укажите Telegram chat_id или Suvvy external_id.');
+    }
     const response = await fetch('/webhook/frontpad/order-status', {
       method: 'POST',
       headers: {
@@ -1372,13 +1490,12 @@ async function sendWebhook() {
 }
 
 function loadSample(name) {
-  const current = JSON.parse(document.getElementById('payload').value);
-  document.getElementById('payload').value = JSON.stringify({ ...current, ...samples[name] }, null, 2);
+  const current = readPayload();
+  writePayload({ ...current, ...samples[name] });
 }
 
 function formatJson() {
-  const field = document.getElementById('payload');
-  field.value = JSON.stringify(JSON.parse(field.value), null, 2);
+  writePayload(readPayload());
 }
 
 async function loadSuvvyEvents() {
